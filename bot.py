@@ -2,11 +2,13 @@ import telebot
 import logging
 import threading
 import time
+from flask import Flask, request
 from config import BOT_TOKEN, ADMIN_CHAT_ID
 from database import Database
 from parser import PirateSwapParser
 from filters import ItemFilter
 from config import SCAN_INTERVAL
+import os
 
 # Configure logging
 logging.basicConfig(
@@ -14,6 +16,9 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Initialize Flask app
+app = Flask(__name__)
 
 # Initialize bot
 bot = telebot.TeleBot(BOT_TOKEN)
@@ -25,12 +30,35 @@ parser = PirateSwapParser()
 # State management for user conversations
 user_states = {}
 
+# Get port from environment
+PORT = int(os.getenv('PORT', 5000))
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://your-app.onrender.com')
+
 # Main keyboard
 def get_main_keyboard():
     """Create main menu keyboard"""
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add('🚀 Старт', '➕ Добавить скин', '📋 Мои поиски')
     return markup
+
+# ==================== WEBHOOK ENDPOINT ====================
+
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+def webhook():
+    """Handle webhook updates from Telegram"""
+    try:
+        json_data = request.get_json()
+        update = telebot.types.Update.de_json(json_data)
+        bot.process_new_updates([update])
+        return 'OK', 200
+    except Exception as e:
+        logger.error(f"Webhook error: {e}")
+        return 'ERROR', 500
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Health check endpoint"""
+    return {'status': 'ok'}, 200
 
 # ==================== BOT COMMANDS ====================
 
@@ -119,7 +147,7 @@ def process_charm_choice(call):
     
     # Save to database
     if db.add_search(user_id, skin_name, charm_required):
-        charm_text = "Да ✨" if charm_required else "��ет"
+        charm_text = "Да ✨" if charm_required else "Нет"
         confirmation = (
             f"✅ <b>Поиск добавлен!</b>\n\n"
             f"<b>Название:</b> {skin_name}\n"
@@ -258,7 +286,20 @@ def background_scanner():
             logger.error(f"Error in background scanner: {e}")
             time.sleep(SCAN_INTERVAL)
 
-# ==================== BOT STARTUP ====================
+# ==================== WEBHOOK SETUP ====================
+
+def setup_webhook():
+    """Setup webhook for Telegram"""
+    try:
+        webhook_url = f"{WEBHOOK_URL}/{BOT_TOKEN}"
+        bot.remove_webhook()
+        time.sleep(1)
+        bot.set_webhook(url=webhook_url, timeout=60)
+        logger.info(f"Webhook set to {webhook_url}")
+    except Exception as e:
+        logger.error(f"Error setting webhook: {e}")
+
+# ==================== STARTUP ====================
 
 def start_background_thread():
     """Start background scanner thread"""
@@ -267,20 +308,18 @@ def start_background_thread():
     logger.info("Background scanner thread started")
 
 if __name__ == '__main__':
-    logger.info("Starting PirateSwap Tracker Bot...")
+    logger.info("Starting PirateSwap Tracker Bot (Web Service Mode)...")
     
     if not BOT_TOKEN or not ADMIN_CHAT_ID:
         logger.error("BOT_TOKEN or ADMIN_CHAT_ID not set in environment variables")
         exit(1)
     
+    # Setup webhook
+    setup_webhook()
+    
     # Start background scanner
     start_background_thread()
     
-    # Start bot polling
-    logger.info("Bot is now running...")
-    try:
-        bot.infinity_polling(timeout=10, long_polling_timeout=10)
-    except Exception as e:
-        logger.error(f"Bot polling error: {e}")
-    finally:
-        logger.info("Bot stopped")
+    # Start Flask server
+    logger.info(f"Flask server starting on port {PORT}...")
+    app.run(host='0.0.0.0', port=PORT, debug=False)
