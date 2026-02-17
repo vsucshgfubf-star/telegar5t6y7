@@ -304,19 +304,47 @@ def send_notifications(matches):
 def background_scanner():
     logger.info("🔄 Background scanner started")
     while True:
+        logger.info("=== [SCANNER] NEW CYCLE STARTED ===")
         try:
-            logger.info("🔍 Starting scan cycle...")
-            items = parser.get_all_items()
-            logger.info(f"[DEBUG] parser.get_all_items() вернул {len(items)} предметов")
-            user_searches = db.get_all_searches()
-            logger.info(f"[DEBUG] db.get_all_searches() вернул {len(user_searches)} фильтров")
-            matches = ItemFilter.filter_items(items, user_searches, db)
-            logger.info(f"[DEBUG] ItemFilter.filter_items нашёл {len(matches)} совпадений")
+            try:
+                items = parser.get_all_items()
+                logger.info(f"[SCANNER] parser.get_all_items() вернул {len(items)} предметов")
+                for idx, it in enumerate(items):
+                    logger.info(f"[SCANNER] ITEM {idx+1}: {it}")
+            except Exception as fetch_exc:
+                logger.error(f"[SCANNER][ERROR] Ошибка при получении предметов через parser.get_all_items: {fetch_exc}", exc_info=True)
+                items = []
+
+            try:
+                user_searches = db.get_all_searches()
+                logger.info(f"[SCANNER] db.get_all_searches() вернул {len(user_searches)} поисков")
+                for idx, search in enumerate(user_searches):
+                    logger.info(f"[SCANNER] SEARCH {idx+1}: {search}")
+            except Exception as filter_exc:
+                logger.error(f"[SCANNER][ERROR] Ошибка при получении поисков пользователей: {filter_exc}", exc_info=True)
+                user_searches = []
+
+            try:
+                matches = ItemFilter.filter_items(items, user_searches, db)
+                logger.info(f"[SCANNER] ItemFilter.filter_items нашёл {len(matches)} совпадений")
+                for idx, match in enumerate(matches):
+                    logger.info(f"[SCANNER] MATCH {idx+1}: {match}")
+            except Exception as filter_exc:
+                logger.error(f"[SCANNER][ERROR] Ошибка при фильтрации: {filter_exc}", exc_info=True)
+                matches = []
+
             if matches:
-                send_notifications(matches)
+                try:
+                    send_notifications(matches)
+                except Exception as notify_exc:
+                    logger.error(f"[SCANNER][ERROR] Ошибка при отправке уведомлений: {notify_exc}", exc_info=True)
+            else:
+                logger.info("[SCANNER] Нет совпадений для уведомления пользователей.")
+
+            logger.info("=== [SCANNER] END OF CYCLE, sleeping before next scan... ===")
             time.sleep(SCAN_INTERVAL)
-        except Exception as e:
-            logger.error(f"❌ Error in background scanner: {e}", exc_info=True)
+        except Exception as cycle_exc:
+            logger.error(f"[SCANNER][ERROR] НЕОЖИДАННАЯ ОШИБКА в основном цикле: {cycle_exc}", exc_info=True)
             time.sleep(SCAN_INTERVAL)
 
 def start_background_thread():
