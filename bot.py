@@ -93,7 +93,7 @@ def start_command(message):
     logger.info(f"🔥 /START COMMAND FROM USER {user_id}")
     welcome_text = (
         "🎮 <b>PirateSwap Tracker Bot</b>\n\n"
-        "<b>Что делает бо��:</b>\n"
+        "<b>Что делает бот:</b>\n"
         "🔍 Отслеживает новые скины на pirateswap.com\n"
         "📢 Отправляет уведомления о найденных скинах\n"
         "💰 Показывает цену и float значения\n"
@@ -118,7 +118,7 @@ def start_command(message):
 def start_button(message):
     start_command(message)
 
-@bot.message_handler(func=lambda message: message.text == '➕ Добавить скин')
+@bot.message_handler(func=lambda message: message.text == '➕ Добавит�� скин')
 def add_skin_start(message):
     user_id = message.chat.id
     logger.info(f"📌 Add skin button pressed by user {user_id}")
@@ -126,7 +126,7 @@ def add_skin_start(message):
     try:
         msg = bot.send_message(
             user_id,
-            "🎯 <b>Ка��ой скин хотите отслеживать?</b>\n\n"
+            "🎯 <b>Какой скин хотите отслеживать?</b>\n\n"
             "<i>Введите название или часть названия скина:</i>\n"
             "Например: <code>AK-47</code> или <code>Dragon Lore</code>",
             reply_markup=telebot.types.ForceReply()
@@ -303,8 +303,11 @@ def background_scanner():
         try:
             logger.info("🔍 Starting scan cycle...")
             items = parser.get_all_items()
+            logger.info(f"[DEBUG] parser.get_all_items() вернул {len(items)} предметов")
             user_searches = db.get_all_searches()
+            logger.info(f"[DEBUG] db.get_all_searches() вернул {len(user_searches)} фильтров")
             matches = ItemFilter.filter_items(items, user_searches, db)
+            logger.info(f"[DEBUG] ItemFilter.filter_items нашёл {len(matches)} совпадений")
             if matches:
                 send_notifications(matches)
             time.sleep(SCAN_INTERVAL)
@@ -313,15 +316,21 @@ def background_scanner():
             time.sleep(SCAN_INTERVAL)
 
 def start_background_thread():
+    if getattr(start_background_thread, 'started', False):
+        logger.info("[DEBUG] Background scanner already started, skipping extra start.")
+        return
     scanner_thread = threading.Thread(target=background_scanner, daemon=True)
     scanner_thread.start()
+    start_background_thread.started = True
     logger.info("✅ Background scanner thread started")
+
+# ГАРАНТИРОВАННО стартуем background scanner — даже под gunicorn, даже на Render!
+start_background_thread()
 
 if __name__ == '__main__':
     logger.info("=" * 70)
     logger.info("🚀 Starting PirateSwap Tracker Bot (Webhook Mode)")
     logger.info("=" * 70)
-    start_background_thread()
 
     if WEBHOOK_URL:
         full_webhook_url = WEBHOOK_URL.rstrip('/') + '/webhook'
@@ -332,7 +341,6 @@ if __name__ == '__main__':
         except Exception as e:
             logger.error(f"❌ Failed to set webhook: {e}", exc_info=True)
             exit(1)
-        # threaded=False — важно для pyTelegramBotAPI и Flask!
         app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False, threaded=False)
     else:
         logger.info("ℹ️ WEBHOOK_URL не задан, используем polling")
