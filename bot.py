@@ -7,15 +7,14 @@ from config import BOT_TOKEN, ADMIN_CHAT_ID
 from database import Database
 from parser import PirateSwapParser
 from filters import ItemFilter
-from config import SCAN_INTERVAL
+from config import SCAN_INTERVAL, DB_NAME
 import os
 import sys
-from threading import Lock
 
-# Configure logging
+# ==================== LOGGING ====================
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.StreamHandler(sys.stdout),
         logging.FileHandler('bot.log')
@@ -23,370 +22,207 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Verify tokens
+# Check tokens
 if not BOT_TOKEN:
-    logger.error("❌ BOT_TOKEN is not set in environment variables!")
+    logger.error("❌ BOT_TOKEN not set!")
     exit(1)
 
-if not ADMIN_CHAT_ID:
-    logger.error("❌ ADMIN_CHAT_ID is not set in environment variables!")
-    exit(1)
+logger.info("✅ Configuration loaded")
 
-logger.info("✅ BOT_TOKEN loaded successfully")
-logger.info(f"✅ ADMIN_CHAT_ID loaded: {ADMIN_CHAT_ID}")
-
-# Initialize Flask app
+# Initialize Flask
 app = Flask(__name__)
-logger.info("✅ Flask app initialized")
 
-# Initialize bot - ВАЖНО: используй threading_handler
-bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML", threaded=True)
-logger.info("✅ Telegram bot initialized")
+# Initialize bot
+bot = telebot.TeleBot(BOT_TOKEN, parse_mode="HTML")
+logger.info("✅ Bot initialized")
 
-# Initialize database and parser
+# Initialize database
 try:
-    db = Database()
+    db = Database(DB_NAME)
     logger.info("✅ Database initialized")
 except Exception as e:
     logger.error(f"❌ Database init failed: {e}")
     exit(1)
 
+# Initialize parser
 try:
     parser = PirateSwapParser()
-    logger.info("✅ PirateSwap parser initialized")
+    logger.info("✅ Parser initialized")
 except Exception as e:
     logger.error(f"❌ Parser init failed: {e}")
     exit(1)
 
-# State management for user conversations with thread-safety
+# User states
 user_states = {}
-state_lock = Lock()
-STATE_TIMEOUT = 3600  # 1 hour in seconds
-
-# Get port from environment
 PORT = int(os.getenv('PORT', 5000))
-WEBHOOK_URL = os.getenv('WEBHOOK_URL')
 
 logger.info(f"✅ PORT: {PORT}")
-if WEBHOOK_URL:
-    logger.info(f"✅ WEBHOOK_URL: {WEBHOOK_URL}")
 
-# ==================== STATE MANAGEMENT ====================
+# ==================== KEYBOARD ====================
 
-def get_user_state(user_id):
-    """Get user state with lock"""
-    with state_lock:
-        return user_states.get(user_id)
-
-def set_user_state(user_id, state):
-    """Set user state with lock and timestamp"""
-    with state_lock:
-        state['created_at'] = time.time()
-        user_states[user_id] = state
-
-def delete_user_state(user_id):
-    """Delete user state with lock"""
-    with state_lock:
-        if user_id in user_states:
-            del user_states[user_id]
-
-def cleanup_expired_states():
-    """Cleanup expired states periodically"""
-    logger.info("🧹 State cleanup thread started")
-    while True:
-        try:
-            time.sleep(300)  # Check every 5 minutes
-            with state_lock:
-                now = time.time()
-                expired_users = [
-                    uid for uid, state in user_states.items()
-                    if now - state.get('created_at', now) > STATE_TIMEOUT
-                ]
-                for uid in expired_users:
-                    del user_states[uid]
-                if expired_users:
-                    logger.info(f"🧹 Cleaned up {len(expired_users)} expired states")
-        except Exception as e:
-            logger.error(f"❌ Error in state cleanup: {e}")
-
-# Main keyboard
 def get_main_keyboard():
-    """Create main menu keyboard"""
+    """Main menu keyboard"""
     markup = telebot.types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=False)
     markup.row('🚀 Старт', '➕ Добавить скин')
     markup.row('📋 Мои поиски')
     return markup
 
-# ==================== WEBHOOK ENDPOINTS ====================
+# ==================== FLASK ROUTES ====================
 
 @app.route('/health', methods=['GET'])
 def health():
-    """Health check endpoint"""
     return {'status': 'ok'}, 200
 
-@app.route('/', methods=['POST', 'GET'])
-def root():
-    """Root endpoint"""
-    if request.method == 'GET':
-        logger.info("✅ GET request to root - Bot is running")
-        return {'status': 'ok', 'message': 'Bot is running'}, 200
-    
-    logger.debug("POST request to root")
-    return handle_webhook()
-
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook_handler():
-    """Main webhook endpoint"""
-    logger.debug(f"⚡ Webhook POST to /{BOT_TOKEN}")
-    return handle_webhook()
-
-def handle_webhook():
-    """Process webhook data - ГЛАВНАЯ ФУНКЦИЯ"""
-    try:
-        if request.headers.get('content-type') == 'application/json':
-            json_data = request.get_json()
-            logger.info(f"📨 Webhook JSON received, update_id: {json_data.get('update_id')}")
-            
-            if json_data:
-                update = telebot.types.Update.de_json(json_data)
-                logger.info(f"✅ Update parsed, type: message={bool(update.message)}, callback={bool(update.callback_query)}")
-                
-                if update:
-                    # ГЛАВНОЕ: передай обновление боту
-                    bot.process_new_updates([update])
-                    logger.info(f"✅ Update {update.update_id} processed")
-                    return 'OK', 200
-        
-        logger.warning("⚠️ No JSON data received")
-        return 'OK', 200
-        
-    except Exception as e:
-        logger.error(f"❌ Webhook error: {e}", exc_info=True)
-        return 'ERROR', 500
+@app.route('/', methods=['GET', 'POST'])
+def index():
+    return {'status': 'ok'}, 200
 
 # ==================== BOT HANDLERS ====================
 
 @bot.message_handler(commands=['start'])
-def start_command(message):
-    """Handle /start command"""
+def cmd_start(message):
+    """Handle /start"""
     user_id = message.chat.id
-    logger.info(f"🔥 /START from user {user_id}")
+    logger.info(f"👤 /start from user {user_id}")
     
-    welcome_text = (
+    text = (
         "🎮 <b>PirateSwap Tracker Bot</b>\n\n"
-        "<b>Что делает бот:</b>\n"
-        "🔍 Отслеживает новые скины на pirateswap.com\n"
-        "📢 Отправляет уведомления о найденных скинах\n"
-        "💰 Показывает цену и float значения\n"
-        "🔗 Предоставляет ссылку для осмотра в игре\n\n"
-        "<b>Как начать:</b>\n"
-        "1️⃣ Нажми '<b>➕ Добавить скин</b>'\n"
-        "2️⃣ Введи название скина\n"
-        "3️⃣ Выбери, нужны ли брелоки\n"
-        "4️⃣ Жди уведомления!\n\n"
-        "<b>Как приходят уведомления:</b>\n"
-        "📬 Бот сканирует PirateSwap каждые 5 минут\n"
-        "🎯 При совпадении с твоим поиском ты получишь сообщение\n"
-        "✅ В сообщении будут все данные о скине"
+        "<b>Возможности:</b>\n"
+        "🔍 Отслеживает скины на pirateswap.com\n"
+        "📢 Отправляет уведомления о находках\n"
+        "💰 Показывает цену и float\n"
+        "🔗 Ссылка для осмотра\n\n"
+        "<b>Начало работы:</b>\n"
+        "1️⃣ Нажми '➕ Добавить скин'\n"
+        "2️⃣ Укажи название скина\n"
+        "3️⃣ Выбери нужны ли брелоки\n"
+        "4️⃣ Жди уведомления!"
     )
     
     try:
-        bot.send_message(user_id, welcome_text, reply_markup=get_main_keyboard())
+        bot.send_message(user_id, text, reply_markup=get_main_keyboard())
         logger.info(f"✅ Start message sent to {user_id}")
     except Exception as e:
-        logger.error(f"❌ Error sending start: {e}", exc_info=True)
+        logger.error(f"❌ Error: {e}")
 
-@bot.message_handler(func=lambda message: message.text == '🚀 Старт')
-def start_button(message):
-    """Handle Start button"""
-    logger.info(f"🚀 Start button from {message.chat.id}")
-    start_command(message)
+@bot.message_handler(func=lambda m: m.text == '🚀 Старт')
+def btn_start(message):
+    """Start button"""
+    cmd_start(message)
 
-@bot.message_handler(func=lambda message: message.text == '➕ Добавить скин')
-def add_skin_start(message):
-    """Start skin addition process"""
+@bot.message_handler(func=lambda m: m.text == '➕ Добавить скин')
+def btn_add_skin(message):
+    """Add skin button"""
     user_id = message.chat.id
     logger.info(f"➕ Add skin from {user_id}")
     
-    set_user_state(user_id, {'step': 'waiting_skin_name'})
-    
-    try:
-        bot.send_message(
-            user_id,
-            "🎯 <b>Какой скин хотите отслеживать?</b>\n\n"
-            "<i>Введите название или часть названия:</i>\n"
-            "Например: <code>AK-47</code> или <code>Dragon Lore</code>",
-            reply_markup=telebot.types.ForceReply()
-        )
-        logger.info(f"✅ Skin request sent to {user_id}")
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
-        delete_user_state(user_id)
+    user_states[user_id] = {'step': 'skin_name'}
+    bot.send_message(user_id, "🎯 Введи название скина:\n(например: AK-47, Dragon Lore)")
+    logger.info(f"✅ Waiting for skin name from {user_id}")
 
-@bot.message_handler(func=lambda message: get_user_state(message.chat.id) and 
-                     get_user_state(message.chat.id).get('step') == 'waiting_skin_name')
+@bot.message_handler(func=lambda m: user_states.get(m.chat.id, {}).get('step') == 'skin_name')
 def process_skin_name(message):
-    """Process skin name input"""
+    """Process skin name"""
     user_id = message.chat.id
     text = message.text
     
-    if not text:
-        logger.warning(f"Empty message from {user_id}")
-        bot.send_message(user_id, "❌ Пожалуйста, отправьте текст")
+    if not text or len(text) < 2:
+        bot.send_message(user_id, "❌ Название слишком короткое (минимум 2 символа)")
         return
     
-    skin_name = text.strip()
-    logger.info(f"📝 Skin name from {user_id}: {skin_name}")
-    
-    if len(skin_name) < 2:
-        bot.send_message(user_id, "❌ Слишком короткое название (минимум 2 символа)")
-        return
-    
-    user_state = get_user_state(user_id)
-    if user_state:
-        user_state['skin_name'] = skin_name
-        user_state['step'] = 'waiting_charm_choice'
-        set_user_state(user_id, user_state)
+    logger.info(f"📝 Skin name: {text}")
+    user_states[user_id] = {'step': 'charm_choice', 'skin_name': text}
     
     markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(
+    markup.row(
         telebot.types.InlineKeyboardButton('✨ Да', callback_data='charm_yes'),
         telebot.types.InlineKeyboardButton('❌ Нет', callback_data='charm_no')
     )
     
-    try:
-        bot.send_message(
-            user_id,
-            f"🎨 <b>Нужен брелок?</b>\n\n<b>Скин:</b> {skin_name}",
-            reply_markup=markup
-        )
-        logger.info(f"✅ Charm choice sent to {user_id}")
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
-        delete_user_state(user_id)
+    bot.send_message(user_id, f"🎨 Нужен брелок?\n\nСкин: <b>{text}</b>", reply_markup=markup)
+    logger.info(f"✅ Asking for charm choice from {user_id}")
 
 @bot.callback_query_handler(func=lambda call: call.data in ['charm_yes', 'charm_no'])
-def process_charm_choice(call):
+def process_charm(call):
     """Process charm choice"""
     user_id = call.message.chat.id
-    call_id = call.id
+    logger.info(f"🎨 Charm choice: {call.data}")
     
-    logger.info(f"🎨 Charm choice from {user_id}: {call.data}")
-    
-    user_state = get_user_state(user_id)
-    if not user_state or user_state.get('step') != 'waiting_charm_choice':
-        logger.warning(f"Invalid state for {user_id}")
-        bot.answer_callback_query(call_id, "❌ Сессия истекла", show_alert=True)
+    if user_id not in user_states or user_states[user_id].get('step') != 'charm_choice':
+        bot.answer_callback_query(call.id, "❌ Сессия истекла", show_alert=True)
         return
     
-    charm_required = 1 if call.data == 'charm_yes' else 0
-    skin_name = user_state.get('skin_name', '')
+    charm = 1 if call.data == 'charm_yes' else 0
+    skin_name = user_states[user_id].get('skin_name', '')
     
     try:
-        if db.add_search(user_id, skin_name, charm_required):
-            charm_text = "Да ✨" if charm_required else "Нет ❌"
-            confirmation = (
-                f"✅ <b>Поиск добавлен!</b>\n\n"
-                f"<b>Скин:</b> {skin_name}\n"
-                f"<b>Брелок:</b> {charm_text}"
-            )
-            
-            bot.send_message(user_id, confirmation, reply_markup=get_main_keyboard())
-            logger.info(f"✅ Search added: {skin_name} for {user_id}")
-            delete_user_state(user_id)
-            bot.answer_callback_query(call_id, "✅ Успешно!", show_alert=False)
+        if db.add_search(user_id, skin_name, charm):
+            charm_text = "Да ✨" if charm else "Нет"
+            msg = f"✅ Поиск добавлен!\n\nСкин: <b>{skin_name}</b>\nБрелок: {charm_text}"
+            bot.send_message(user_id, msg, reply_markup=get_main_keyboard())
+            logger.info(f"✅ Search added for {user_id}: {skin_name}")
+            del user_states[user_id]
+            bot.answer_callback_query(call.id)
         else:
-            logger.warning(f"Failed to add search for {user_id}")
-            bot.answer_callback_query(call_id, "❌ Ошибка добавления", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Такой поиск уже есть", show_alert=True)
     except Exception as e:
-        logger.error(f"❌ Error: {e}")
-        bot.answer_callback_query(call_id, "❌ Ошибка", show_alert=True)
-        delete_user_state(user_id)
+        logger.error(f"❌ Error adding search: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
 
-@bot.message_handler(func=lambda message: message.text == '📋 Мои поиски')
-def show_searches(message):
-    """Show user searches"""
+@bot.message_handler(func=lambda m: m.text == '📋 Мои поиски')
+def btn_my_searches(message):
+    """Show searches"""
     user_id = message.chat.id
-    logger.info(f"📋 Show searches from {user_id}")
+    logger.info(f"📋 Show searches for {user_id}")
     
     try:
         searches = db.get_user_searches(user_id)
-        logger.info(f"Found {len(searches)} searches for {user_id}")
         
         if not searches:
-            bot.send_message(
-                user_id,
-                "📭 <b>Нет активных поисков</b>\n\n"
-                "Нажмите '➕ Добавить скин'",
-                reply_markup=get_main_keyboard()
-            )
+            bot.send_message(user_id, "📭 Нет поисков\n\nНажми '➕ Добавить скин'", reply_markup=get_main_keyboard())
             return
         
-        response = "📋 <b>Ваши поиски:</b>\n\n"
+        text = "📋 <b>Ваши поиски:</b>\n\n"
         markup = telebot.types.InlineKeyboardMarkup()
         
-        for search_id, skin_name, charm_required in searches:
-            charm_text = "✨" if charm_required else "❌"
-            response += f"• <b>{skin_name}</b> {charm_text}\n"
-            markup.add(telebot.types.InlineKeyboardButton(f"🗑 {skin_name}", callback_data=f"delete_{search_id}"))
+        for sid, sname, scharm in searches:
+            charm_emoji = "✨" if scharm else "❌"
+            text += f"• <b>{sname}</b> {charm_emoji}\n"
+            markup.add(telebot.types.InlineKeyboardButton(f"🗑 {sname}", callback_data=f"del_{sid}"))
         
-        bot.send_message(user_id, response, reply_markup=markup)
-        logger.info(f"✅ Searches list sent to {user_id}")
-        
+        bot.send_message(user_id, text, reply_markup=markup)
+        logger.info(f"✅ Searches sent to {user_id}")
     except Exception as e:
         logger.error(f"❌ Error: {e}")
         bot.send_message(user_id, "❌ Ошибка")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('delete_'))
+@bot.callback_query_handler(func=lambda call: call.data.startswith('del_'))
 def delete_search(call):
     """Delete search"""
     user_id = call.message.chat.id
-    call_id = call.id
-    
     try:
-        search_id = int(call.data.split('_')[1])
-        logger.info(f"🗑 Delete {search_id} from {user_id}")
+        sid = int(call.data.split('_')[1])
+        logger.info(f"🗑 Delete search {sid}")
         
-        if db.delete_search(search_id):
-            bot.answer_callback_query(call_id, "✅ Удалено!", show_alert=False)
-            bot.edit_message_text("🗑 <b>Удалено</b>", user_id, call.message.message_id)
-            logger.info(f"✅ Search {search_id} deleted")
+        if db.delete_search(sid):
+            bot.edit_message_text("🗑 Удалено", user_id, call.message.message_id)
+            bot.answer_callback_query(call.id)
+            logger.info(f"✅ Search deleted")
         else:
-            bot.answer_callback_query(call_id, "❌ Ошибка", show_alert=True)
+            bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
     except Exception as e:
         logger.error(f"❌ Error: {e}")
-        bot.answer_callback_query(call_id, "❌ Ошибка", show_alert=True)
+        bot.answer_callback_query(call.id, "❌ Ошибка", show_alert=True)
 
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(func=lambda m: True)
 def default_handler(message):
-    """Handle other messages"""
+    """Default handler"""
     user_id = message.chat.id
-    text = message.text if message.text else "[No text]"
+    text = message.text if message.text else "[no text]"
     logger.info(f"💬 Message from {user_id}: {text}")
-    
-    try:
-        bot.send_message(user_id, "👋 Используйте меню внизу", reply_markup=get_main_keyboard())
-    except Exception as e:
-        logger.error(f"❌ Error: {e}")
+    bot.send_message(user_id, "👋 Используй кнопки внизу", reply_markup=get_main_keyboard())
 
 # ==================== NOTIFICATIONS ====================
-
-def format_notification(match):
-    """Format notification"""
-    has_keychains_text = "Да ✨" if match['has_keychains'] else "Нет"
-    
-    message = (
-        f"🎉 <b>Найден скин!</b>\n\n"
-        f"<b>Название:</b> {match['market_hash_name']}\n"
-        f"<b>Цена:</b> ${match['price']}\n"
-        f"<b>Float:</b> {match['float']:.6f}\n"
-        f"<b>Брелоки:</b> {has_keychains_text}\n\n"
-    )
-    
-    if match.get('inspect_link'):
-        message += f"<b>Inspect:</b> <a href='{match['inspect_link']}'>Осмотреть в игре</a>"
-    
-    return message
 
 def send_notifications(matches):
     """Send notifications"""
@@ -395,13 +231,25 @@ def send_notifications(matches):
     for match in matches:
         try:
             user_id = match['user_id']
-            notification = format_notification(match)
-            bot.send_message(user_id, notification)
+            charm_text = "Да ✨" if match['has_keychains'] else "Нет"
+            
+            msg = (
+                f"🎉 <b>Найден скин!</b>\n\n"
+                f"<b>Название:</b> {match['market_hash_name']}\n"
+                f"<b>Цена:</b> ${match['price']}\n"
+                f"<b>Float:</b> {match['float']:.6f}\n"
+                f"<b>Брелоки:</b> {charm_text}\n\n"
+            )
+            
+            if match.get('inspect_link'):
+                msg += f"<a href='{match['inspect_link']}'>Осмотреть</a>"
+            
+            bot.send_message(user_id, msg)
             logger.info(f"✅ Notification to {user_id}")
         except Exception as e:
             logger.error(f"❌ Error: {e}")
 
-# ==================== BACKGROUND SCANNER ====================
+# ==================== SCANNER ====================
 
 def background_scanner():
     """Background scanner thread"""
@@ -409,59 +257,54 @@ def background_scanner():
     
     while True:
         try:
-            logger.info("🔍 Scan cycle...")
+            logger.info("🔍 Scanning...")
             
             items = parser.get_all_items()
-            logger.info(f"📥 Fetched {len(items)} items")
+            logger.info(f"📥 {len(items)} items fetched")
             
-            if not items:
-                time.sleep(SCAN_INTERVAL)
-                continue
+            if items:
+                user_searches = db.get_all_searches()
+                logger.info(f"🔎 {len(user_searches)} active searches")
+                
+                if user_searches:
+                    matches = ItemFilter.filter_items(items, user_searches, db)
+                    logger.info(f"✨ {len(matches)} matches found")
+                    
+                    if matches:
+                        send_notifications(matches)
             
-            user_searches = db.get_all_searches()
-            logger.info(f"🔎 {len(user_searches)} active searches")
-            
-            if not user_searches:
-                time.sleep(SCAN_INTERVAL)
-                continue
-            
-            matches = ItemFilter.filter_items(items, user_searches, db)
-            logger.info(f"✨ Found {len(matches)} matches")
-            
-            if matches:
-                send_notifications(matches)
-            
-            logger.info(f"⏳ Next scan in {SCAN_INTERVAL}s")
             time.sleep(SCAN_INTERVAL)
             
         except Exception as e:
-            logger.error(f"❌ Scanner error: {e}", exc_info=True)
+            logger.error(f"❌ Scanner error: {e}")
             time.sleep(SCAN_INTERVAL)
 
-# ==================== STARTUP ====================
+# ==================== MAIN ====================
 
-def start_background_threads():
-    """Start background threads"""
-    cleanup_thread = threading.Thread(target=cleanup_expired_states, daemon=True)
-    cleanup_thread.start()
-    logger.info("✅ Cleanup thread started")
+if __name__ == '__main__':
+    logger.info("=" * 60)
+    logger.info("🚀 PirateSwap Tracker Bot starting...")
+    logger.info("=" * 60)
     
+    # Start scanner thread
     scanner_thread = threading.Thread(target=background_scanner, daemon=True)
     scanner_thread.start()
     logger.info("✅ Scanner thread started")
-
-if __name__ == '__main__':
-    logger.info("=" * 70)
-    logger.info("🚀 Starting PirateSwap Tracker Bot")
-    logger.info("=" * 70)
     
-    start_background_threads()
+    # Start Flask in thread
+    flask_thread = threading.Thread(
+        target=lambda: app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False),
+        daemon=True
+    )
+    flask_thread.start()
+    logger.info(f"✅ Flask started on port {PORT}")
     
-    logger.info(f"🌐 Flask on 0.0.0.0:{PORT}")
-    logger.info("=" * 70)
+    # Start polling
+    logger.info("=" * 60)
+    logger.info("📡 Bot polling started - waiting for messages...")
+    logger.info("=" * 60)
     
     try:
-        app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False, threaded=True)
+        bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
     except Exception as e:
-        logger.error(f"❌ Flask error: {e}", exc_info=True)
-        exit(1)
+        logger.error(f"❌ Polling error: {e}")
