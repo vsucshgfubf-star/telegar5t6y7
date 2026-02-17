@@ -54,7 +54,7 @@ class ItemFilter:
                                 'inspect_link': inspect_link
                             })
             except Exception as e:
-                logger.error(f"Error filtering item: {e}")
+                logger.error(f"❌ Error filtering item: {e}")
                 continue
         
         return matches
