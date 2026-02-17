@@ -31,21 +31,21 @@ class PirateSwapParser:
                 data = response.json()
                 
                 if 'data' in data and isinstance(data['data'], list):
-                    logger.info(f"Successfully fetched page {page} with {len(data['data'])} items")
+                    logger.info(f"✅ Fetched page {page} with {len(data['data'])} items")
                     return data['data']
                 else:
-                    logger.warning(f"Unexpected API response format on page {page}")
+                    logger.warning(f"⚠️ Unexpected response format on page {page}")
                     return []
                     
             except requests.exceptions.Timeout:
-                logger.warning(f"Timeout on page {page}, attempt {attempt + 1}/{self.max_retries}")
+                logger.warning(f"⏱️ Timeout on page {page}, attempt {attempt + 1}/{self.max_retries}")
             except requests.exceptions.ConnectionError:
-                logger.warning(f"Connection error on page {page}, attempt {attempt + 1}/{self.max_retries}")
+                logger.warning(f"🔗 Connection error on page {page}, attempt {attempt + 1}/{self.max_retries}")
             except requests.exceptions.HTTPError as e:
-                logger.error(f"HTTP error on page {page}: {e}")
+                logger.error(f"❌ HTTP error on page {page}: {e}")
                 break
             except Exception as e:
-                logger.error(f"Error parsing page {page}: {e}")
+                logger.error(f"❌ Error parsing page {page}: {e}")
                 break
         
         return []
@@ -58,5 +58,5 @@ class PirateSwapParser:
             items = self.fetch_inventory(page)
             all_items.extend(items)
         
-        logger.info(f"Total items fetched: {len(all_items)}")
+        logger.info(f"📊 Total items fetched: {len(all_items)}")
         return all_items
