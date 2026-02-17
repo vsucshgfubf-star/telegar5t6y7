@@ -422,10 +422,13 @@ if __name__ == '__main__':
     logger.info("🚀 Starting PirateSwap Tracker Bot (Webhook Mode)")
     logger.info("=" * 70)
     
-    # Start background threads
+    # Start background scanner thread
     start_background_thread()
-    start_flask_thread()
     
+    # Start Flask server (Render Web будет принимать POST запросы от Telegram)
+    logger.info(f"📡 Flask server started on port {PORT} - waiting for webhook updates...")
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False)
+
     # Setup webhook if URL задан
     if WEBHOOK_URL:
         try:
