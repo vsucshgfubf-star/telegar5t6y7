@@ -62,6 +62,10 @@ user_states = {}
 
 # Get port from environment
 PORT = int(os.getenv('PORT', 5000))
+WEBHOOK_URL = os.getenv('WEBHOOK_URL')  # Должен быть типа https://yourdomain.com/webhook
+
+if not WEBHOOK_URL:
+    logger.warning("⚠️ WEBHOOK_URL не задан. Использовать polling локально.")
 
 logger.info(f"✅ PORT: {PORT}")
 
@@ -82,14 +86,20 @@ def health():
     logger.debug("Health check requested")
     return {'status': 'ok'}, 200
 
-@app.route('/', methods=['POST', 'GET'])
+@app.route('/', methods=['GET'])
 def root():
     """Root endpoint"""
-    if request.method == 'GET':
-        logger.info("GET request to root")
-        return {'status': 'Bot is running'}, 200
-    logger.debug("POST request to root endpoint")
-    return 'OK', 200
+    logger.info("GET request to root")
+    return {'status': 'Bot is running'}, 200
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Telegram webhook handler"""
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    logger.info("✅ Webhook update processed")
+    return '', 200
 
 # ==================== BOT MESSAGE HANDLERS ====================
 
@@ -130,8 +140,6 @@ def start_command(message):
 @bot.message_handler(func=lambda message: message.text == '🚀 Старт')
 def start_button(message):
     """Handle Start button"""
-    user_id = message.chat.id
-    logger.info(f"📌 Start button pressed by user {user_id}")
     start_command(message)
 
 @bot.message_handler(func=lambda message: message.text == '➕ Добавить скин')
@@ -411,19 +419,26 @@ def start_flask_thread():
 
 if __name__ == '__main__':
     logger.info("=" * 70)
-    logger.info("🚀 Starting PirateSwap Tracker Bot (Polling Mode)")
+    logger.info("🚀 Starting PirateSwap Tracker Bot (Webhook Mode)")
     logger.info("=" * 70)
     
     # Start background threads
     start_background_thread()
     start_flask_thread()
     
-    # Start polling
-    logger.info(f"📡 Bot polling started - waiting for messages...")
-    logger.info("=" * 70)
-    
-    try:
-        bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
-    except Exception as e:
-        logger.error(f"❌ Polling error: {e}", exc_info=True)
-        exit(1)
+    # Setup webhook if URL задан
+    if WEBHOOK_URL:
+        try:
+            bot.remove_webhook()
+            bot.set_webhook(url=f"{WEBHOOK_URL}/webhook")
+            logger.info(f"✅ Webhook set: {WEBHOOK_URL}/webhook")
+        except Exception as e:
+            logger.error(f"❌ Failed to set webhook: {e}", exc_info=True)
+            exit(1)
+    else:
+        logger.info("ℹ️ WEBHOOK_URL не задан, используем polling")
+        try:
+            bot.infinity_polling(timeout=30, long_polling_timeout=30, skip_pending=True)
+        except Exception as e:
+            logger.error(f"❌ Polling error: {e}", exc_info=True)
+            exit(1)
