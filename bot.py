@@ -118,7 +118,7 @@ def start_command(message):
 def start_button(message):
     start_command(message)
 
-@bot.message_handler(func=lambda message: message.text == '➕ Добавит�� скин')
+@bot.message_handler(func=lambda message: message.text == '➕ Добавить скин')
 def add_skin_start(message):
     user_id = message.chat.id
     logger.info(f"📌 Add skin button pressed by user {user_id}")
@@ -141,7 +141,7 @@ def add_skin_start(message):
 def process_skin_name(message):
     user_id = message.chat.id
     skin_name = message.text.strip()
-    logger.info(f"📝 Skin name input from user {user_id}: '{skin_name}'")
+    logger.info(f"📝 Skin name input from user {user_id}: '{skin_name}', state: {user_states[user_id]}")
     if not skin_name or len(skin_name) < 2:
         logger.warning(f"❌ Invalid skin name length from {user_id}")
         bot.send_message(user_id, "❌ Название скина слишком короткое. Пожалуйста, введите минимум 2 символа.")
@@ -171,7 +171,7 @@ def process_skin_name(message):
 def process_charm_choice(call):
     user_id = call.message.chat.id
     call_id = call.id
-    logger.info(f"📌 Charm choice callback from user {user_id}: {call.data}")
+    logger.info(f"📌 Charm choice callback from user {user_id}: {call.data}, state: {user_states.get(user_id)}")
     if user_id not in user_states or user_states[user_id].get('step') != 'waiting_charm_choice':
         logger.warning(f"❌ Invalid state for user {user_id}")
         bot.answer_callback_query(call_id, "❌ Сессия истекла. Начните заново.", show_alert=True)
@@ -181,16 +181,16 @@ def process_charm_choice(call):
     skin_name = user_states[user_id]['skin_name']
 
     try:
-        if db.add_search(user_id, skin_name, charm_required):
+        added = db.add_search(user_id, skin_name, charm_required)
+        if added:
             charm_text = "Да ✨" if charm_required else "Нет"
             confirmation = (
                 f"✅ <b>Поиск добавлен!</b>\n\n"
                 f"<b>Название:</b> {skin_name}\n"
                 f"<b>Брелок:</b> {charm_text}"
             )
-            msg = bot.send_message(user_id, confirmation, reply_markup=get_main_keyboard())
+            bot.send_message(user_id, confirmation, reply_markup=get_main_keyboard())
             logger.info(f"✅ Search added for user {user_id}: {skin_name} (charm: {charm_required})")
-            del user_states[user_id]
             bot.answer_callback_query(call_id, "✅ Поиск успешно добавлен!", show_alert=False)
         else:
             logger.warning(f"❌ Failed to add search for user {user_id}")
@@ -199,6 +199,7 @@ def process_charm_choice(call):
                 "❌ Такой поиск уже существует или произошла ошибка",
                 show_alert=True
             )
+        del user_states[user_id]
     except Exception as e:
         logger.error(f"❌ Error adding search for {user_id}: {e}", exc_info=True)
         bot.answer_callback_query(call_id, f"❌ Ошибка: {str(e)}", show_alert=True)
@@ -262,8 +263,11 @@ def delete_search(call):
 @bot.message_handler(func=lambda message: True)
 def default_handler(message):
     user_id = message.chat.id
+    if user_id in user_states:
+        logger.info(f"default_handler SKIP: user {user_id} in dialogue: {user_states[user_id]}")
+        return
     text = message.text
-    logger.info(f"📝 Message from user {user_id}: '{text}'")
+    logger.info(f"📝 Default message from user {user_id}: '{text}'")
     try:
         bot.send_message(
             user_id,
