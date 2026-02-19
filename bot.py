@@ -347,23 +347,19 @@ def background_scanner():
             logger.error(f"[SCANNER][ERROR] НЕОЖИДАННАЯ ОШИБКА в основном цикле: {cycle_exc}", exc_info=True)
             time.sleep(SCAN_INTERVAL)
 
-def start_background_thread():
-    if getattr(start_background_thread, 'started', False):
-        logger.info("[DEBUG] Background scanner already started, skipping extra start.")
-        return
-    scanner_thread = threading.Thread(target=background_scanner, daemon=True)
-    scanner_thread.start()
-    start_background_thread.started = True
-    logger.info("✅ Background scanner thread started")
-
-# ГАРАНТИРОВАННО стартуем background scanner — даже под gunicorn, даже на Render!
-start_background_thread()
+def run_flask():
+    app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False, threaded=False)
 
 if __name__ == '__main__':
     logger.info("=" * 70)
-    logger.info("🚀 Starting PirateSwap Tracker Bot (Webhook Mode)")
+    logger.info("🚀 Starting PirateSwap Tracker Bot (Web Service + Scanner in ONE process)")
     logger.info("=" * 70)
 
+    # === Запуск сканера в отдельном НЕ-демон-потоке ===
+    scanner_thread = threading.Thread(target=background_scanner, name='scanner', daemon=False)
+    scanner_thread.start()
+
+    # === Настраиваем webhook перед запуском Flask
     if WEBHOOK_URL:
         full_webhook_url = WEBHOOK_URL.rstrip('/') + '/webhook'
         try:
@@ -373,7 +369,7 @@ if __name__ == '__main__':
         except Exception as e:
             logger.error(f"❌ Failed to set webhook: {e}", exc_info=True)
             exit(1)
-        app.run(host='0.0.0.0', port=PORT, debug=False, use_reloader=False, threaded=False)
+        run_flask()
     else:
         logger.info("ℹ️ WEBHOOK_URL не задан, используем polling")
         try:
